@@ -1,0 +1,246 @@
+---
+title: "Stat 520 Project"
+author: "Brian Bruxvoort"
+format: pdf
+---
+
+# Load libraries and data
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(corrplot)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(caret)
+library(car)
+library(stats)
+library(ranger)
+library(factoextra)
+realtor <- read.csv("~/Truman_Stat_520/Project/realtor-data.zip.csv")
+pollution <- read.csv("~/Truman_Stat_520/Project/pollution_us_2000_2016.csv")
+```
+
+# Clean Data
+```{r}
+realtor2 <- realtor %>%
+  select(city, state, price) %>%
+  rename(City = city, State = state, Price = price) %>%
+  group_by(City, State) %>%
+  summarise(
+    MeanPrice = mean(Price, na.rm = TRUE),
+    MedianPrice = median(Price, na.rm = TRUE),
+    MaxPrice = max(Price, na.rm = FALSE),
+    .groups = 'drop'
+  )
+```
+
+```{r}
+pollution2 <- pollution %>% 
+  select(State, City, NO2.AQI, O3.AQI, SO2.AQI, CO.AQI, Date.Local)
+```
+
+```{r}
+joined_data <- inner_join(realtor2, pollution2, by = c("City", "State"))
+```
+
+# Data Exploration
+```{r}
+summary(joined_data)
+```
+
+```{r}
+numeric_columns <- sapply(joined_data, is.numeric)
+
+numeric_variable_names <- names(joined_data)[numeric_columns]
+
+output <- lapply(numeric_variable_names, function(var_name) {
+  hist(joined_data[[var_name]], main = paste("Histogram of", var_name), xlab = var_name, xaxt = 'n')
+  axis(1, las=2)
+})
+```
+
+```{r}
+ggplot(joined_data, aes(x = NO2.AQI, y = MedianPrice)) +
+  geom_point() +  
+  geom_smooth(method = "lm", col = "blue") +  
+  theme_minimal() +  
+  labs(title = "Scatter plot of Median Price vs NO2 AQI", x = "NO2 AQI", y = "Median Price")
+```
+
+```{r}
+cor_matrix <- cor(joined_data[, sapply(joined_data, is.numeric)], use = "complete.obs")
+corrplot(cor_matrix, method = "circle", type = "upper", order = "hclust",
+         tl.col = "black", tl.srt = 45, 
+         col = colorRampPalette(c("#BB4444", "white", "#4477AA"))(200))
+```
+
+```{r}
+joined_data$MaxPrice[is.na(joined_data$MaxPrice)] <- mean(joined_data$MaxPrice, na.rm = TRUE)
+
+# Median imputation
+joined_data$SO2.AQI[is.na(joined_data$SO2.AQI)] <- median(joined_data$SO2.AQI, na.rm = TRUE)
+joined_data$CO.AQI[is.na(joined_data$CO.AQI)] <- median(joined_data$CO.AQI, na.rm = TRUE)
+```
+
+```{r}
+summary(joined_data)
+```
+
+# Multiple Linear Regression
+```{r}
+linear.model <- lm(MedianPrice ~ NO2.AQI + SO2.AQI + O3.AQI + CO.AQI, data = joined_data)
+summary(linear.model)
+```
+
+```{r}
+# Make predictions
+predictions <- predict(linear.model, newdata = joined_data)
+
+# Actual values
+actuals <- joined_data$MedianPrice
+
+# Calculating the residuals
+residuals <- predictions - actuals
+
+# Calculating RMSE
+rmse <- sqrt(mean(residuals^2))
+
+# Calculating MAE
+mae <- mean(abs(residuals))
+
+# Print the results
+cat("RMSE: ", rmse, "\n")
+cat("MAE: ", mae, "\n")
+```
+
+
+# CART
+```{r}
+cart.model <- rpart(MedianPrice ~ NO2.AQI + O3.AQI + SO2.AQI + CO.AQI, 
+               data=joined_data, 
+               method="anova")
+```
+
+```{r}
+rpart.plot(cart.model)
+```
+
+```{r}
+predictions <- predict(cart.model, newdata=joined_data)
+```
+
+```{r}
+actual_values <- joined_data$MedianPrice
+
+# MAE
+mae <- mean(abs(predictions - actual_values))
+print(paste("Mean Absolute Error (MAE):", mae))
+
+# MSE
+mse <- mean((predictions - actual_values)^2)
+print(paste("Mean Squared Error (MSE):", mse))
+
+# RMSE
+rmse <- sqrt(mse)
+print(paste("Root Mean Squared Error (RMSE):", rmse))
+
+# R-squared
+rss <- sum((predictions - actual_values)^2)
+tss <- sum((actual_values - mean(actual_values))^2)
+rsquared <- 1 - (rss/tss)
+print(paste("R-squared (R²):", rsquared))
+```
+
+
+
+
+# Random Forest
+```{r}
+rf.model <- ranger(MedianPrice ~ NO2.AQI + O3.AQI + SO2.AQI + CO.AQI, 
+                   data=joined_data,
+                   method="anova")
+```
+
+```{r}
+rf.predictions <- predict(rf.model, data=joined_data, type = "response")
+```
+
+```{r}
+predicted_values <- rf.predictions$predictions
+
+# Actual values
+actual_values <- joined_data$MedianPrice
+
+# MAE
+mae <- mean(abs(predicted_values - actual_values))
+print(paste("Mean Absolute Error (MAE):", mae))
+
+# MSE
+mse <- mean((predicted_values - actual_values)^2)
+print(paste("Mean Squared Error (MSE):", mse))
+
+# RMSE
+rmse <- sqrt(mse)
+print(paste("Root Mean Squared Error (RMSE):", rmse))
+
+# R-squared
+rss <- sum((predicted_values - actual_values)^2)
+tss <- sum((actual_values - mean(actual_values))^2)
+rsquared <- 1 - (rss/tss)
+print(paste("R-squared (R²):", rsquared))
+```
+
+# PCA
+```{r}
+# Extract predictor variables
+predictors <- joined_data[, c("NO2.AQI", "SO2.AQI", "O3.AQI", "CO.AQI")]
+
+# Perform PCA on the predictors
+pca_results <- prcomp(predictors, center = TRUE, scale. = TRUE) # Standardizing variables
+summary(pca_results)
+
+# Extracting the scores of the first two PCs
+pc_scores <- pca_results$x[, 1:2]
+
+# Prepare the data for regression
+# Combine the PC scores with the MedianPrice
+regression_data <- data.frame(cbind(pc_scores, MedianPrice = joined_data$MedianPrice))
+
+# Linear Regression using the principal components to predict MedianPrice
+model <- lm(MedianPrice ~ ., data = regression_data)
+summary(model)
+```
+
+```{r}
+predictions <- predict(model, regression_data)
+
+# Actual values
+actuals <- regression_data$MedianPrice
+
+# Calculate MAE
+mae <- mean(abs(predictions - actuals))
+
+# Calculate MSE
+mse <- mean((predictions - actuals)^2)
+
+# Calculate RMSE
+rmse <- sqrt(mse)
+
+# Print the metrics
+cat("MAE:", mae, "\n")
+cat("MSE:", mse, "\n")
+cat("RMSE:", rmse, "\n")
+```
+
+```{r}
+plot(pca_results, type = "lines")
+summary(pca_results)
+fviz_eig(pca_results)
+fviz_pca_var(pca_results,
+             col.var = "contrib", # Color by contributions to the PC
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE     # Avoid text overlapping
+)
+```
+
